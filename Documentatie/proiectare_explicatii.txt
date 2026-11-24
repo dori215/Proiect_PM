@@ -1,0 +1,54 @@
+DECIZII DE PROIECTARE
+1. Parametri generali
+8086-2 în modul minim (MN/MX = +5 V): procesorul generează singur ALE, RD, WR, M/IO, DT/R, DEN.
+Cristal 15 MHz → 8284 împarte la 3 → CLK = 5 MHz (T = 200 ns). PCLK = 2,5 MHz pentru periferice.
+Fără stări de așteptare: un ciclu durează 4 perioade (800 ns), iar memoriile de 70 ns răspund mai repede. READY rămâne activ (RDY1 = +5 V, AEN1 = GND).
+Adresele sunt reținute de 3× 74LS373 pe frontul ALE (A0-A19 și BHE). Datele trec prin 2× 74LS245 (DT/R = sensul, DEN = activarea).
+INTR, NMI și HOLD sunt legate la GND. Tabela vectorilor rămâne rezervată în SRAM.
+2. Harta de memorie
+EPROM 2× 27C512 = 128 KB la E0000H-FFFFFH. La reset 8086 pornește de la FFFF0H (CS = FFFFH, IP = 0000H), deci codul de pornire trebuie să fie în memorie nevolatilă, în zona de sus. Prima instrucțiune este un JMP FAR spre programul propriu-zis.
+SRAM 2× 62256 = 64 KB la 00000H-0FFFFH. Tabela vectorilor (00000H-003FFH, 256 × 4 octeți) trebuie să fie în memorie scriabilă, deci jos. Datele și stiva sunt în 00400H-0FFFFH.
+Câte 2 cipuri pe fiecare memorie: banca pară (D0-D7, A0 = 0) și banca impară (D8-D15, BHE = 0).
+Zona 10000H-DFFFFH rămâne neocupată.
+Conectare: A1-A16 → A0-A15 la EPROM, A1-A15 → A0-A14 la SRAM, /OE = /RD. A0 nu merge la cipuri, el alege banca.
+Scriere SRAM: /WE_pară = /WR SAU A0, /WE_impară = /WR SAU BHE.
+3. Decodarea memoriei
+74LS138 pe A19 A18 A17 (C B A), cu G1 = M/IO și G2A = G2B = GND.
+000 → Y0, iar /CS_SRAM = Y0 SAU A16 (doar 00000H-0FFFFH, fără oglindire).
+111 → Y7 = /CE ambele EPROM.
+Restul combinațiilor: zone neocupate.
+4. Harta de I/O
+8251: 05D0H (date) și 05D2H (comandă/stare) cu S1 = 0, respectiv 07D0H și 07D2H cu S1 = 1. Linia C/D = A1.
+8255: 0A50H-0A56H (port A, B, C, control) cu S2 = 0, respectiv 0B50H-0B56H cu S2 = 1. A0 și A1 ale 8255 vin din A1 și A2 ale 8086.
+Porturi cu latch (doar scriere): 0C00H (LED 1-8), 0C02H (LED 9-14), 0C04H (segmente), 0C06H (cifre), 0C08H (date LCD), 0C0AH (RS și E LCD).
+Toate adresele sunt pare, pentru că perifericele sunt pe D0-D7 (banca pară, A0 = 0).
+Adresele peste FFH se accesează prin DX: mov dx, 05D0H apoi in al, dx.
+Decodarea este completă, fără alias-uri.
+5. Comutatoarele S1 și S2
+05D0H și 07D0H diferă doar prin A9 (0200H). 0A50H și 0B50H diferă doar prin A8 (0100H).
+S1 stabilește valoarea așteptată pentru A9, iar S2 pentru A8. Compararea cu liniile de adresă se face printr-o poartă XOR, cu pull-up de 10 kΩ pe comutator.
+Circuitul este selectat când A9 ⊕ S1 = 0, respectiv A8 ⊕ S2 = 0.
+Schimbarea comutatorului mută circuitul în alt bloc fără modificarea restului schemei, ceea ce ajută la conflicte și depanare.
+6. Liniile de I/O
+Necesar: LED 14 + segmente și cifre 14 + tastatură 7 + LCD 10 + port paralel 10 = 55 linii. 8255 are doar 24.
+8255 în modul 0, cuvânt de control 83H:
+PA (ieșire) = date spre DB25.
+PB0 (intrare) = BUSY.
+PC7 (ieșire) = /STROBE.
+PC4-PC6 (ieșire) = coloanele tastaturii.
+PC0-PC3 (intrare) = rândurile tastaturii, cu pull-up de 10 kΩ.
+Restul liniilor merg pe 6 porturi de ieșire cu 74LS374, la adrese I/O libere. Impulsul de ceas vine din decodor, activ doar în timpul lui /WR, iar frontul crescător memorează datele.
+Porturile sunt doar pentru scriere, deci programul ține în SRAM o copie a ultimei valori (de exemplu starea LED-urilor).
+7. Afișajele
+LED-uri: anod la +5 V prin rezistență, catod la latch. Se aprind cu 0 logic.
+7 segmente (6 ranguri, catod comun): segmentele sunt legate în paralel prin 74LS244 și rezistențe. Fiecare rang este activat de un tranzistor NPN comandat din latch-ul de cifre. Software-ul aprinde pe rând câte un rang (multiplexare).
+8. Interfața LCD
+Mod 8 biți prin latch-uri: D0-D7 din 0C08H, RS și E din 0C0AH.
+R/W la GND, E comandat din software (1 apoi 0), fără citirea busy flag, cu întârzieri software.
+Motiv: impulsul E cere minim ~450 ns. Generat din software, nu depinde de temporizarea magistralei, iar codul rămâne simplu.
+9. Ceasul de baud al 8251
+8251 nu are generator de baud, deci TxC și RxC cer ceas extern.
+PCLK (2,5 MHz) → 74LS393 (÷16) → 156,25 kHz, cu 8251 în modul ×16. Rezultă ≈9765 baud față de 9600 nominal, o eroare de 1,7%, acceptabilă în comunicația asincronă.
+Nu avem nevoie de al doilea cristal.
+10. Reset
+8284 generează RESET (activ pe 1) pentru 8086, 8251 și 8255, cu buton și circuit RC.
